@@ -1,0 +1,23 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "폴드7 실행",
+            "request": "launch",
+            "type": "dart",
+            "deviceId": "R3CY70YPFTW"
+        },
+        {
+            "name": "노트5 실행",
+            "request": "launch",
+            "type": "dart",
+            "deviceId": "279ad1211a1c7ece"
+        }
+    ],
+    "compounds": [
+        {
+            "name": "두 기기 동시 실행 (Double Run)",
+            "configurations": ["폴드7 실행", "노트5 실행"]
+        }
+    ]
+}
