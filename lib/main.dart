@@ -1,3 +1,4 @@
+// cSpell:ignore Chosung
 import 'dart:async';
 import 'dart:math';
 import 'dart:convert'; 
@@ -424,7 +425,7 @@ class _GameControllerState extends State<GameController> {
     showDialog(context: context, barrierDismissible: false, builder: (ctx) => AlertDialog(
       title: Text("$realName님의 연결 요청"),
       actions: [
-        TextButton(child: const Text("거절"), onPressed: () { Navigator.pop(ctx); try{Nearby().rejectConnection(id);}catch(e){} }),
+        TextButton(child: const Text("거절"), onPressed: () { Navigator.pop(ctx); try{Nearby().rejectConnection(id);}catch(e){ /* 연결 거절 중 에러 무시 */ } }),
         ElevatedButton(child: const Text("수락"), onPressed: () { 
           Navigator.pop(ctx); 
           setState(() { peerNickName = realName; });

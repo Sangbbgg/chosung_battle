@@ -92,7 +92,7 @@ class BanPickScreen extends StatelessWidget {
                     border: Border.all(color: borderColor, width: 3),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.grey.withOpacity(0.3),
+                        color: Colors.grey.withAlpha((0.3 * 255).toInt()),
                         blurRadius: 5,
                         offset: const Offset(2, 2),
                       )

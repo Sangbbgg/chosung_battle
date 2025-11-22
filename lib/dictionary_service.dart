@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'api_key.dart';
@@ -18,14 +19,14 @@ class DictionaryService {
       // req_type=json 뒤에 q=word를 붙임
       String url = "https://stdict.korean.go.kr/api/search.do?key=$apiKey&req_type=json&q=$encodedWord";
       
-      print("검색 시도: $url"); // [디버깅] 주소 확인
+      debugPrint("검색 시도: $url"); // [디버깅] 주소 확인
 
       final response = await http.get(Uri.parse(url));
 
       if (response.statusCode == 200) {
         // 공백이거나 결과가 없으면
         if (response.body.trim().isEmpty) {
-          print("결과 없음: Body가 비어있음");
+          debugPrint("결과 없음: Body가 비어있음");
           return null;
         }
 
@@ -55,10 +56,10 @@ class DictionaryService {
           }
         }
       } else {
-        print("서버 에러: ${response.statusCode}");
+        debugPrint("서버 에러: ${response.statusCode}");
       }
     } catch (e) {
-      print("❌ 사전 검색 에러 발생: $e");
+      debugPrint("❌ 사전 검색 에러 발생: $e");
       // 인터넷 권한이 없으면 여기서 SocketException이 뜹니다.
     }
     return null;
