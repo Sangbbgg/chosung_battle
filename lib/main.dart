@@ -1,7 +1,7 @@
 // cSpell:ignore Chosung
 import 'dart:async';
 import 'dart:math';
-import 'dart:convert'; 
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:nearby_connections/nearby_connections.dart';
@@ -11,12 +11,41 @@ import 'game_core.dart';
 import 'screens/connect_screen.dart';
 import 'screens/ban_pick_screen.dart';
 import 'screens/battle_screen.dart';
-import 'korean_parser.dart'; 
+import 'korean_parser.dart';
 import 'dictionary_service.dart';
-// import 'api_key.dart'; 
+import 'screens/card_pick_screen.dart'; // 카드픽 스크린 임포트
+// import 'api_key.dart';
+
+// === 카드/아이템 선택용 변수 선언 ===
+List<CardType> myAvailableCards = [
+  CardType.luckyBox,
+  CardType.blind,
+  CardType.history,
+  CardType.liar,
+  CardType.doubleAttack,
+];
+List<CardType> mySelectedCards = []; // 내가 실제로 들고갈 카드
+List<CardType> peerSelectedCards = []; // 상대방 카드(동기화)
+bool myCardPickDone = false;
+bool peerCardPickDone = false;
+
+// 카드 랜덤 배정 함수
+List<CardType> pickRandomCards(int count) {
+  List<CardType> temp = List.from(myAvailableCards);
+  temp.shuffle();
+  return temp.take(count).toList();
+}
+
+// phase 추가
+// enum GamePhase { roleSelect, scanning, lobby, cardPick, ban, pick, battle, end } // 중복 정의 삭제
 
 void main() {
-  runApp(const MaterialApp(debugShowCheckedModeBanner: false, home: GameController()));
+  runApp(
+    const MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: GameController(),
+    ),
+  );
 }
 
 class GameController extends StatefulWidget {
@@ -33,7 +62,7 @@ class _GameControllerState extends State<GameController> {
   String myNickName = "플레이어 ${Random().nextInt(999)}";
   String peerNickName = "상대방";
   bool isHost = false;
-  Map<String, String> discoveredDevices = {}; 
+  Map<String, String> discoveredDevices = {};
 
   // === 게임 변수 ===
   GamePhase phase = GamePhase.roleSelect;
@@ -53,9 +82,8 @@ class _GameControllerState extends State<GameController> {
   Set<String> usedWords = {};
   TextEditingController textCtrl = TextEditingController();
   Timer? gameTimer;
-  
-  int myChallengeCount = 3;
-  bool hasChallengedThisTurn = false; 
+
+  bool hasChallengedThisTurn = false;
   bool isCheckingChallenge = false;
 
   @override
@@ -63,19 +91,28 @@ class _GameControllerState extends State<GameController> {
     return Scaffold(
       appBar: AppBar(
         title: Text(_getTitle()),
-        backgroundColor: phase == GamePhase.battle 
-            ? (isMyTurn ? Colors.blue : Colors.red) 
+        backgroundColor: phase == GamePhase.battle
+            ? (isMyTurn ? Colors.blue : Colors.red)
             : Colors.indigo,
         actions: [
-          if (phase == GamePhase.lobby || phase == GamePhase.ban || phase == GamePhase.pick || phase == GamePhase.battle)
+          if (phase == GamePhase.lobby ||
+              phase == GamePhase.ban ||
+              phase == GamePhase.pick ||
+              phase == GamePhase.battle)
             TextButton.icon(
               icon: const Icon(Icons.flag, color: Colors.white),
-              label: const Text("기권", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              label: const Text(
+                "기권",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
               onPressed: confirmGiveUp,
             ),
           if (phase == GamePhase.end || phase == GamePhase.scanning)
-             IconButton(
-              icon: const Icon(Icons.exit_to_app), 
+            IconButton(
+              icon: const Icon(Icons.exit_to_app),
               onPressed: disconnect,
               tooltip: "나가기",
             ),
@@ -91,7 +128,10 @@ class _GameControllerState extends State<GameController> {
       builder: (ctx) => AlertDialog(
         title: const Text("🏳️ 기권하시겠습니까?"),
         actions: [
-          TextButton(child: const Text("취소"), onPressed: () => Navigator.pop(ctx)),
+          TextButton(
+            child: const Text("취소"),
+            onPressed: () => Navigator.pop(ctx),
+          ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: const Text("기권 확인"),
@@ -125,15 +165,29 @@ class _GameControllerState extends State<GameController> {
           onNickNameChanged: (val) => setState(() => myNickName = val),
           onGameStart: startGameSetup,
         );
-      
+      case GamePhase.cardPick:
+        return CardPickScreen(
+          pickCount: gameCardCount,
+          onSubmit: (picked) {
+            setState(() {
+              mySelectedCards = picked;
+              myCardPickDone = true;
+              // 추후: sendMessage("SYNC_CARDS", picked.map((e) => e.index).join(","));
+              // peerCardPickDone==true 이면 다음 phase로 진입
+              if (peerCardPickDone) {
+                phase = GamePhase.ban; // 예시로 - 실제 배틀/밴픽 플로우 맞춤
+              }
+            });
+          },
+          isRandomMode: false, // 추후 랜덤 여부 파라미터에 따라 true/false
+        );
       case GamePhase.ban:
-      case GamePhase.pick:
         return BanPickScreen(
           phase: phase,
           initialChars: initialChars,
           myBan: myBanChar,
           peerBan: peerBanChar,
-          selectedChar: phase == GamePhase.ban ? myBanChar : myPickChar,
+          selectedChar: myBanChar,
           onSelect: (char) {
             sendMessage(phase == GamePhase.ban ? "BAN" : "PICK", char);
             setState(() {
@@ -146,8 +200,30 @@ class _GameControllerState extends State<GameController> {
             checkPhaseProgress();
           },
         );
-
+      case GamePhase.pick:
+        return BanPickScreen(
+          phase: phase,
+          initialChars: initialChars,
+          myBan: myBanChar,
+          peerBan: peerBanChar,
+          selectedChar: myPickChar,
+          onSelect: (char) {
+            sendMessage(phase == GamePhase.ban ? "BAN" : "PICK", char);
+            setState(() {
+              if (phase == GamePhase.ban) {
+                myBanChar = char;
+              } else {
+                myPickChar = char;
+              }
+            });
+            checkPhaseProgress();
+          },
+        );
       case GamePhase.battle:
+        // 내 보유 카드 현황: CardItem 리스트로 가공 (isUsed: false로 초기화된 예)
+        List<CardItem> myCardItemsView = mySelectedCards
+            .map((e) => CardItem(type: e, isUsed: false))
+            .toList();
         return BattleScreen(
           isMyTurn: isMyTurn,
           myTime: myTime,
@@ -157,143 +233,191 @@ class _GameControllerState extends State<GameController> {
           textCtrl: textCtrl,
           myNickName: myNickName,
           peerNickName: peerNickName,
-          challengeCount: myChallengeCount,
           isChallengeUsed: hasChallengedThisTurn,
-          isChecking: isCheckingChallenge, 
-          
+          isChecking: isCheckingChallenge,
+          myCardItems: myCardItemsView,
+          onCardUse: (CardType type) {
+            // 카드 사용시 처리 예시(실제 효과/used 처리 후속에 구현)
+            int idx = mySelectedCards.indexOf(type);
+            if (idx != -1) {
+              setState(() {
+                // 임시: 사용한 카드를 상태에서 제거 (실제로는 CardItem.isUsed = true로 해야함)
+                // mySelectedCards.removeAt(idx);
+                // 실전에서는 별도 usedCardSet, CardItem 관리 추천
+              });
+            }
+            // TODO: 카드별 실제 효과(시간조작, 블라인드 등), 동기화 등은 후속에서 구현
+          },
+          onSubmit: (val) {
+            if (val.isEmpty) return;
+            if (usedWords.contains(val)) {
+              showSnack("이미 쓴 단어! (-10초)");
+              setState(() => myTime -= 10);
+              return;
+            }
+            String targetChosung = finalKeyword.replaceAll(" ", "");
+            String? inputChosung = KoreanParser.extractChosung(val);
+            if (inputChosung == null) {
+              showSnack("한글만 입력해주세요!");
+              return;
+            }
+            if (inputChosung != targetChosung) {
+              showSnack("초성이 틀렸습니다! (목표: $targetChosung)");
+              return;
+            }
+
+            sendMessage("WORD", val);
+            processWord(val, true);
+          },
+
           onChallenge: (targetWord) async {
             if (hasChallengedThisTurn || isCheckingChallenge) return;
 
-            setState(() { isCheckingChallenge = true; });
+            setState(() {
+              isCheckingChallenge = true;
+            });
             showSnack("🔍 사전 검색 중...");
 
-            String? definition = await DictionaryService.searchWordDefinition(targetWord);
-            
+            String? definition = await DictionaryService.searchWordDefinition(
+              targetWord,
+            );
+
             if (!mounted) return;
-            
+
             setState(() {
               isCheckingChallenge = false;
-              
+
               if (definition != null) {
                 // [실패]
-                myChallengeCount--; 
+                myTime -= 60;
                 hasChallengedThisTurn = true;
-                
-                if (myChallengeCount <= 0) {
-                   showDialog(
-                     context: context,
-                     barrierDismissible: false,
-                     builder: (ctx) => AlertDialog(
-                       title: const Text("❌ 3회 실패! 게임 오버"),
-                       content: SingleChildScrollView(child: Text("단어 뜻:\n$definition\n\n기회를 모두 소진하여 패배했습니다.")),
-                       actions: [
-                         ElevatedButton(
-                           onPressed: () {
-                             Navigator.pop(ctx);
-                             sendMessage("GAME_OVER", "WIN"); 
-                             disconnect();
-                           },
-                           child: const Text("확인"),
-                         )
-                       ],
-                     ),
-                   );
-                } else {
-                  myTime -= 60;
-                  showDialog(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: Text("❌ 실패! (남은 기회: $myChallengeCount)"),
-                      content: SingleChildScrollView(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Text("사전에 존재하는 단어입니다.", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
-                            const SizedBox(height: 10),
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(8)),
-                              child: Text(definition, style: const TextStyle(fontSize: 14)),
+
+                showDialog(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text("❌ 이의 제기 실패!"),
+                    content: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text(
+                            "사전에 존재하는 단어입니다.",
+                            style: TextStyle(
+                              color: Colors.red,
+                              fontWeight: FontWeight.bold,
                             ),
-                            const SizedBox(height: 10),
-                            const Text("내 시간 -60초 페널티!"),
-                          ],
-                        ),
+                          ),
+                          const SizedBox(height: 10),
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: Colors.grey[200],
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              definition,
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          const Text("내 시간 -60초 페널티!"),
+                        ],
                       ),
-                      actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("확인"))],
                     ),
-                  );
-                }
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text("확인"),
+                      ),
+                    ],
+                  ),
+                );
               } else {
                 // [성공]
-                 showDialog(
-                   context: context,
-                   barrierDismissible: false,
-                   builder: (ctx) => AlertDialog(
-                     title: const Text("✅ 이의 제기 성공!"),
-                     content: const Text("사전에 없는 단어입니다!\n상대방의 반칙으로 승리했습니다! 🎉"),
-                     actions: [
-                       ElevatedButton(
-                         onPressed: () {
-                           Navigator.pop(ctx);
-                           sendMessage("GAME_OVER", "LOSE");
-                           disconnect();
-                         },
-                         child: const Text("확인"),
-                       )
-                     ],
-                   ),
-                 );
+                showDialog(
+                  context: context,
+                  barrierDismissible: false,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text("✅ 이의 제기 성공!"),
+                    content: const Text("사전에 없는 단어입니다!\n상대방의 반칙으로 승리했습니다! 🎉"),
+                    actions: [
+                      ElevatedButton(
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          sendMessage("GAME_OVER", "LOSE");
+                          disconnect();
+                        },
+                        child: const Text("확인"),
+                      ),
+                    ],
+                  ),
+                );
               }
             });
           },
-          
-          onSubmit: (val) {
-             if (val.isEmpty) return;
-             if (usedWords.contains(val)) {
-               showSnack("이미 쓴 단어! (-10초)");
-               setState(() => myTime -= 10);
-               return;
-             }
-             String targetChosung = finalKeyword.replaceAll(" ", ""); 
-             String? inputChosung = KoreanParser.extractChosung(val);
-             if (inputChosung == null) { showSnack("한글만 입력해주세요!"); return; }
-             if (inputChosung != targetChosung) { showSnack("초성이 틀렸습니다! (목표: $targetChosung)"); return; }
-
-             sendMessage("WORD", val);
-             processWord(val, true);
-          },
         );
-
       case GamePhase.end:
         return Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text(myTime > 0 ? "승리! 🎉" : "패배 😭", style: const TextStyle(fontSize: 50, fontWeight: FontWeight.bold)),
+              Text(
+                myTime > 0 ? "승리! 🎉" : "패배 😭",
+                style: const TextStyle(
+                  fontSize: 50,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
               const SizedBox(height: 20),
-              ElevatedButton(onPressed: disconnect, child: const Text("메인으로 돌아가기"))
+              ElevatedButton(
+                onPressed: disconnect,
+                child: const Text("메인으로 돌아가기"),
+              ),
             ],
-          )
+          ),
         );
     }
   }
 
   String _getTitle() {
     switch (phase) {
-      case GamePhase.roleSelect: return "닉네임 설정";
-      case GamePhase.scanning: return isHost ? "도전자 대기 중" : "방 찾는 중";
-      case GamePhase.lobby: return "대기실";
-      case GamePhase.ban: return "자음 제외 (BAN)";
-      case GamePhase.pick: return "자음 선택 (PICK)";
-      case GamePhase.battle: return "초성 배틀";
-      case GamePhase.end: return "게임 종료";
+      case GamePhase.roleSelect:
+        return "닉네임 설정";
+      case GamePhase.scanning:
+        return isHost ? "도전자 대기 중" : "방 찾는 중";
+      case GamePhase.lobby:
+        return "대기실";
+      case GamePhase.cardPick:
+        return "카드 선택";
+      case GamePhase.ban:
+        return "자음 제외 (BAN)";
+      case GamePhase.pick:
+        return "자음 선택 (PICK)";
+      case GamePhase.battle:
+        return "초성 배틀";
+      case GamePhase.end:
+        return "게임 종료";
     }
   }
 
   void startGameSetup() {
-    final chars = ["ㄱ","ㄴ","ㄷ","ㄹ","ㅁ","ㅂ","ㅅ","ㅇ","ㅈ","ㅊ","ㅋ","ㅌ","ㅍ","ㅎ"];
+    final chars = [
+      "ㄱ",
+      "ㄴ",
+      "ㄷ",
+      "ㄹ",
+      "ㅁ",
+      "ㅂ",
+      "ㅅ",
+      "ㅇ",
+      "ㅈ",
+      "ㅊ",
+      "ㅋ",
+      "ㅌ",
+      "ㅍ",
+      "ㅎ",
+    ];
     chars.shuffle();
     initialChars = chars.sublist(0, 5);
     sendMessage("START_BAN", initialChars.join(","));
@@ -303,7 +427,9 @@ class _GameControllerState extends State<GameController> {
   void checkPhaseProgress() {
     if (phase == GamePhase.ban && myBanChar != null && peerBanChar != null) {
       phase = GamePhase.pick;
-    } else if (phase == GamePhase.pick && myPickChar != null && peerPickChar != null) {
+    } else if (phase == GamePhase.pick &&
+        myPickChar != null &&
+        peerPickChar != null) {
       if (isHost) {
         List<String> f = [myPickChar!, peerPickChar!];
         f.shuffle();
@@ -344,16 +470,19 @@ class _GameControllerState extends State<GameController> {
     if (sentByMe) textCtrl.clear();
     setState(() {
       isMyTurn = !sentByMe;
-      hasChallengedThisTurn = false; 
+      hasChallengedThisTurn = false;
     });
   }
 
   // [수정된 startHosting]
   void startHosting(int timeMin, String cardCountStr) async {
-    if (myNickName.isEmpty) { showSnack("닉네임을 입력해주세요"); return; }
-    
+    if (myNickName.isEmpty) {
+      showSnack("닉네임을 입력해주세요");
+      return;
+    }
+
     int setTime = timeMin * 60;
-    
+
     // 실제 게임용 숫자 (내부 저장)
     int finalCardCount;
     if (cardCountStr == "랜덤") {
@@ -371,17 +500,28 @@ class _GameControllerState extends State<GameController> {
     });
 
     // [핵심] 광고용 이름표 (랜덤이면 "랜덤"이라고 보냄)
-    String displayCardInfo = (cardCountStr == "랜덤") ? "랜덤" : finalCardCount.toString();
+    String displayCardInfo = (cardCountStr == "랜덤")
+        ? "랜덤"
+        : finalCardCount.toString();
     String advertisingName = "$myNickName|$timeMin|$displayCardInfo";
 
     try {
-      await Nearby().startAdvertising(advertisingName, strategy, onConnectionInitiated: onConnInit, onConnectionResult: (id, s) {
-        if(s == Status.CONNECTED) {
-          setState(() { peerId = id; phase = GamePhase.lobby; });
-          // 연결 후에는 실제 확정된 장수(finalCardCount)를 동기화
-          sendMessage("SYNC_SETTINGS", "$myTime:$gameCardCount");
-        }
-      }, onDisconnected: (id) => disconnect());
+      await Nearby().startAdvertising(
+        advertisingName,
+        strategy,
+        onConnectionInitiated: onConnInit,
+        onConnectionResult: (id, s) {
+          if (s == Status.CONNECTED) {
+            setState(() {
+              peerId = id;
+              phase = GamePhase.lobby;
+            });
+            // 연결 후에는 실제 확정된 장수(finalCardCount)와 이의제기 횟수 objectionCount를 동기화
+            sendMessage("SYNC_SETTINGS", "$myTime:$gameCardCount");
+          }
+        },
+        onDisconnected: (id) => disconnect(),
+      );
     } catch (e) {
       showSnack("오류: $e");
       disconnect();
@@ -389,10 +529,23 @@ class _GameControllerState extends State<GameController> {
   }
 
   void startDiscovery() async {
-    if(myNickName.isEmpty) { showSnack("닉네임을 입력해주세요"); return; }
-    setState(() { isHost = false; phase = GamePhase.scanning; discoveredDevices.clear(); });
+    if (myNickName.isEmpty) {
+      showSnack("닉네임을 입력해주세요");
+      return;
+    }
+    setState(() {
+      isHost = false;
+      phase = GamePhase.scanning;
+      discoveredDevices.clear();
+    });
     try {
-      await Nearby().startDiscovery(myNickName, strategy, onEndpointFound: (id, name, s) => setState(() => discoveredDevices[id] = name), onEndpointLost: (id) => setState(() => discoveredDevices.remove(id)));
+      await Nearby().startDiscovery(
+        myNickName,
+        strategy,
+        onEndpointFound: (id, name, s) =>
+            setState(() => discoveredDevices[id] = name),
+        onEndpointLost: (id) => setState(() => discoveredDevices.remove(id)),
+      );
     } catch (e) {
       showSnack("오류: $e");
       disconnect();
@@ -401,20 +554,47 @@ class _GameControllerState extends State<GameController> {
 
   void requestConnection(String id) async {
     try {
-      await Nearby().requestConnection(myNickName, id, onConnectionInitiated: onConnInit, onConnectionResult: (id, s) => s == Status.CONNECTED ? setState(() { peerId = id; phase = GamePhase.lobby; }) : null, onDisconnected: (id) => disconnect());
+      await Nearby().requestConnection(
+        myNickName,
+        id,
+        onConnectionInitiated: onConnInit,
+        onConnectionResult: (id, s) => s == Status.CONNECTED
+            ? setState(() {
+                peerId = id;
+                phase = GamePhase.lobby;
+              })
+            : null,
+        onDisconnected: (id) => disconnect(),
+      );
     } catch (e) {
-      if (e.toString().contains("8003")) { showSnack("이미 연결 요청을 보냈거나 연결된 상태입니다."); } else { showSnack("오류: $e"); }
+      if (e.toString().contains("8003")) {
+        showSnack("이미 연결 요청을 보냈거나 연결된 상태입니다.");
+      } else {
+        showSnack("오류: $e");
+      }
     }
   }
 
   void disconnect() {
     if (peerId != null) Nearby().disconnectFromEndpoint(peerId!);
-    Nearby().stopAdvertising(); Nearby().stopDiscovery();
-    setState(() { 
-      phase = GamePhase.roleSelect; peerId = null; discoveredDevices.clear(); 
-      myTime=480; peerTime=480; history=["???","???","???"]; usedWords.clear(); 
-      initialChars = []; myBanChar=null; peerBanChar=null; myPickChar=null; peerPickChar=null; 
-      peerNickName="상대방"; myChallengeCount=3; hasChallengedThisTurn=false; isCheckingChallenge=false; 
+    Nearby().stopAdvertising();
+    Nearby().stopDiscovery();
+    setState(() {
+      phase = GamePhase.roleSelect;
+      peerId = null;
+      discoveredDevices.clear();
+      myTime = 480;
+      peerTime = 480;
+      history = ["???", "???", "???"];
+      usedWords.clear();
+      initialChars = [];
+      myBanChar = null;
+      peerBanChar = null;
+      myPickChar = null;
+      peerPickChar = null;
+      peerNickName = "상대방";
+      hasChallengedThisTurn = false;
+      isCheckingChallenge = false;
     });
   }
 
@@ -422,17 +602,42 @@ class _GameControllerState extends State<GameController> {
     String rawName = info.endpointName;
     String realName = rawName.split("|")[0];
 
-    showDialog(context: context, barrierDismissible: false, builder: (ctx) => AlertDialog(
-      title: Text("$realName님의 연결 요청"),
-      actions: [
-        TextButton(child: const Text("거절"), onPressed: () { Navigator.pop(ctx); try{Nearby().rejectConnection(id);}catch(e){ /* 연결 거절 중 에러 무시 */ } }),
-        ElevatedButton(child: const Text("수락"), onPressed: () { 
-          Navigator.pop(ctx); 
-          setState(() { peerNickName = realName; });
-          Nearby().acceptConnection(id, onPayLoadRecieved: (id, p) { if(p.type == PayloadType.BYTES) handleMessage(utf8.decode(p.bytes!)); }); 
-        }),
-      ],
-    ));
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Text("$realName님의 연결 요청"),
+        actions: [
+          TextButton(
+            child: const Text("거절"),
+            onPressed: () {
+              Navigator.pop(ctx);
+              try {
+                Nearby().rejectConnection(id);
+              } catch (e) {
+                /* 연결 거절 중 에러 무시 */
+              }
+            },
+          ),
+          ElevatedButton(
+            child: const Text("수락"),
+            onPressed: () {
+              Navigator.pop(ctx);
+              setState(() {
+                peerNickName = realName;
+              });
+              Nearby().acceptConnection(
+                id,
+                onPayLoadRecieved: (id, p) {
+                  if (p.type == PayloadType.BYTES)
+                    handleMessage(utf8.decode(p.bytes!));
+                },
+              );
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   void sendMessage(String type, String val) {
@@ -444,25 +649,50 @@ class _GameControllerState extends State<GameController> {
 
   void handleMessage(String msg) {
     List<String> p = msg.split(":");
-    String type = p[0]; String val = p.length > 1 ? p[1] : "";
-    
+    String type = p[0];
+    String val = p.length > 1 ? p[1] : "";
+
     setState(() {
-      if (type == "START_BAN") { initialChars = val.split(","); phase = GamePhase.ban; }
-      else if (type == "BAN") { peerBanChar = val; checkPhaseProgress(); }
-      else if (type == "PICK") { peerPickChar = val; checkPhaseProgress(); }
-      else if (type == "START_GAME") { finalKeyword = val; if (p.length > 2) isMyTurn = (p[2] != "HOST"); phase = GamePhase.battle; startTimer(); }
-      else if (type == "WORD") { processWord(val, false); }
-      else if (type == "SURRENDER") { showSnack("상대방 기권! 승리!"); disconnect(); }
-      else if (type == "GAME_OVER") { if (val == "WIN") { phase = GamePhase.end; myTime = 0; } else { phase = GamePhase.end; myTime = 100; } gameTimer?.cancel(); }
-      else if (type == "SYNC_SETTINGS") {
+      if (type == "START_BAN") {
+        initialChars = val.split(",");
+        phase = GamePhase.ban;
+      } else if (type == "BAN") {
+        peerBanChar = val;
+        checkPhaseProgress();
+      } else if (type == "PICK") {
+        peerPickChar = val;
+        checkPhaseProgress();
+      } else if (type == "START_GAME") {
+        finalKeyword = val;
+        if (p.length > 2) isMyTurn = (p[2] != "HOST");
+        phase = GamePhase.battle;
+        startTimer();
+      } else if (type == "WORD") {
+        processWord(val, false);
+      } else if (type == "SURRENDER") {
+        showSnack("상대방 기권! 승리!");
+        disconnect();
+      } else if (type == "GAME_OVER") {
+        if (val == "WIN") {
+          phase = GamePhase.end;
+          myTime = 0;
+        } else {
+          phase = GamePhase.end;
+          myTime = 100;
+        }
+        gameTimer?.cancel();
+      } else if (type == "SYNC_SETTINGS") {
         if (p.length > 2) {
           int tVal = int.parse(p[1]);
-          myTime = tVal; peerTime = tVal;
+          myTime = tVal;
+          peerTime = tVal;
           gameCardCount = int.parse(p[2]);
         }
       }
     });
   }
 
-  void showSnack(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), duration: const Duration(milliseconds: 1500)));
+  void showSnack(String m) => ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text(m), duration: const Duration(milliseconds: 1500)),
+  );
 }
